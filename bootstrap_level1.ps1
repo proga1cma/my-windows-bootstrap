@@ -1,4 +1,6 @@
 # bootstrap_level1.ps1
+# ВАЖНО: Сохраните этот файл в кодировке UTF-8 with BOM!
+#
 # Разместить в: https://github.com/proga1cma/my-windows-bootstrap/blob/main/bootstrap_level1.ps1
 # Команда для запуска (PowerShell от Администратора):
 # Set-ExecutionPolicy Bypass -Scope Process -Force; [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072; iex ((New-Object System.Net.WebClient).DownloadString('https://raw.githubusercontent.com/proga1cma/my-windows-bootstrap/main/bootstrap_level1.ps1'))
@@ -18,20 +20,34 @@
     6. После завершения работы bootstrap_python.py, удаляет временный SSH-ключ.
 .NOTES
     Автор: proga1cma (адаптировано из шаблона)
-    Версия: 1.0
+    Версия: 1.1 (с улучшенной поддержкой кириллицы)
     Требуется запуск от имени Администратора.
     Пользователь должен заранее подготовить (расшифровать) свой приватный SSH-ключ.
 #>
 
 # --- Начальные настройки и вывод информации ---
+$ProgressPreference = 'SilentlyContinue' # Отключаем прогресс-бары для более чистого вывода
+$ErrorActionPreference = "Stop" # Останавливать выполнение при ошибках в командлетах, которые это поддерживают
+
+# Попытка установить кодировку вывода консоли в UTF-8 для лучшего отображения кириллицы
+# Это может не сработать или не дать эффекта, если шрифт консоли не поддерживает Unicode.
+# Начиная с Windows 10 версии 1903, можно изменить активную кодовую страницу на UTF-8 (chcp 65001),
+# но это лучше делать до запуска PowerShell.
+# Для текущего сеанса PowerShell можно установить $OutputEncoding.
+try {
+    $OutputEncoding = [System.Text.Encoding]::UTF8
+    # Если используется PowerShell Core (pwsh.exe), эта строка не всегда нужна, т.к. он лучше работает с UTF-8.
+} catch {
+    Write-Warning "Не удалось установить кодировку вывода в UTF-8. Кириллица может отображаться некорректно."
+}
+
 Write-Host "--- Загрузчик первого уровня (bootstrap_level1.ps1) ---" -ForegroundColor Yellow
 Write-Host "Репозиторий скрипта: https://github.com/proga1cma/my-windows-bootstrap" -ForegroundColor Cyan
 Write-Host "Автор: proga1cma" -ForegroundColor Cyan
+Write-Host "Версия: 1.1" -ForegroundColor Cyan
 Write-Host ""
 
 # --- Конфигурация ---
-$ErrorActionPreference = "Stop" # Останавливать выполнение при ошибках в командлетах
-
 # URL к Python-загрузчику (в том же репозитории, что и этот скрипт)
 $PythonBootstrapScriptUrl = "https://raw.githubusercontent.com/proga1cma/my-windows-bootstrap/main/bootstrap_python.py"
 $PythonBootstrapScriptLocalPath = Join-Path -Path $env:TEMP -ChildPath "bootstrap_python.py"
@@ -41,30 +57,28 @@ $MainAutomationRepoUrl = "git@github.com:proga1cma/YOUR_MAIN_PRIVATE_AUTOMATION_
 $MainAutomationLocalDir = "C:\WindowsAutomationSetup" # Куда будет склонирован основной репозиторий
 
 # Путь, куда будет скопирован предоставленный пользователем SSH-ключ для временного использования
-$TempSshKeyForUse = Join-Path -Path $env:TEMP -ChildPath "temp_id_rsa_bootstrap_key"
+$TempSshKeyForUse = Join-Path -Path $env:TEMP -ChildPath "temp_id_rsa_bootstrap_key_$(Get-Random)" # Добавляем случайное число для уникальности
 
 # --- Функции ---
 
 Function Install-Chocolatey {
-    Write-Host "[INFO] Проверка и установка Chocolatey..." -ForegroundColor White
+    Write-Host "[ИНФО] Проверка и установка Chocolatey..." -ForegroundColor White
     $ChocoExe = Get-Command choco -ErrorAction SilentlyContinue
     If ($ChocoExe) {
-        Write-Host "[SUCCESS] Chocolatey уже установлен: $($ChocoExe.Source)" -ForegroundColor Green
+        Write-Host "[УСПЕХ] Chocolatey уже установлен: $($ChocoExe.Source)" -ForegroundColor Green
         Return $True
     }
     Try {
-        Write-Host "[INFO] Установка Chocolatey..."
-        # Команда установки Chocolatey
-        Set-ExecutionPolicy Bypass -Scope Process -Force; # Уже должно быть установлено внешней командой, но на всякий случай
-        [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072; # Аналогично
+        Write-Host "[ИНФО] Установка Chocolatey..."
+        Set-ExecutionPolicy Bypass -Scope Process -Force;
+        [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072;
         iex ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
-        
-        # Добавляем choco в PATH для текущей сессии
         $env:Path += ";$($env:ProgramData)\chocolatey\bin"
-        Write-Host "[SUCCESS] Chocolatey успешно установлен." -ForegroundColor Green
+        Write-Host "[УСПЕХ] Chocolatey успешно установлен." -ForegroundColor Green
         Return $True
     } Catch {
-        Write-Error "[FAILURE] Ошибка при установке Chocolatey: $($_.Exception.Message)"
+        Write-Error "[ОШИБКА] Ошибка при установке Chocolatey: $($_.Exception.Message)"
+        Write-Error "Полная информация об ошибке: $_"
         Return $False
     }
 }
@@ -72,48 +86,47 @@ Function Install-Chocolatey {
 Function Install-Package-With-Choco {
     Param(
         [Parameter(Mandatory=$true)]
-        [string]$PackageName,
+        [string]$PackageName, # Имя пакета для отображения пользователю
         [Parameter(Mandatory=$true)]
-        [string]$ChocoId, # Идентификатор пакета для Chocolatey
-        [string]$InstallCheckCommand, # Команда для проверки, установлен ли пакет
-        [string]$InstallCheckExpectedOutputPattern # Regex-паттерн для ожидаемого вывода
+        [string]$ChocoId,
+        [string]$InstallCheckCommand,
+        [string]$InstallCheckExpectedOutputPattern
     )
-    Write-Host "[INFO] Проверка и установка пакета: $PackageName..." -ForegroundColor White
+    Write-Host "[ИНФО] Проверка и установка пакета: $PackageName..." -ForegroundColor White
     $isInstalled = $False
     If ($InstallCheckCommand) {
         Try {
             $checkResult = Invoke-Expression $InstallCheckCommand
             If ($checkResult -match $InstallCheckExpectedOutputPattern) {
                 $isInstalled = $True
-                Write-Host "[SUCCESS] $PackageName уже установлен." -ForegroundColor Green
+                Write-Host "[УСПЕХ] $PackageName уже установлен." -ForegroundColor Green
             }
         } Catch {
-            # Ошибка при проверке, скорее всего, пакет не установлен или команда не найдена
-            Write-Host "[INFO] Проверка установки $PackageName не удалась, предполагаем, что пакет не установлен."
+            Write-Host "[ИНФО] Проверка установки $PackageName не удалась, предполагаем, что пакет не установлен."
         }
     }
 
     If ($isInstalled) { Return $True }
 
-    Write-Host "[INFO] Установка $PackageName (ID: $ChocoId) через Chocolatey..."
+    Write-Host "[ИНФО] Установка $PackageName (ID: $ChocoId) через Chocolatey..."
     Try {
         choco install $ChocoId -y --force --no-progress --limit-output
-        # Повторная проверка после установки
         If ($InstallCheckCommand) {
             $checkResultAfterInstall = Invoke-Expression $InstallCheckCommand
             If ($checkResultAfterInstall -match $InstallCheckExpectedOutputPattern) {
-                Write-Host "[SUCCESS] $PackageName успешно установлен через Chocolatey." -ForegroundColor Green
+                Write-Host "[УСПЕХ] $PackageName успешно установлен через Chocolatey." -ForegroundColor Green
                 Return $True
             } Else {
-                Write-Warning "[WARNING] Chocolatey сообщил об установке $PackageName, но проверка ($InstallCheckCommand) не прошла."
-                Return $False # Или True, если мы доверяем Choco, но лучше False для строгости
+                Write-Warning "[ПРЕДУПРЕЖДЕНИЕ] Chocolatey сообщил об установке $PackageName, но проверка ($InstallCheckCommand) не прошла."
+                Return $False
             }
-        } Else { # Если команды проверки нет, считаем успешной установку по коду возврата Choco
-             Write-Host "[SUCCESS] $PackageName (предположительно) успешно установлен через Chocolatey (нет команды проверки)." -ForegroundColor Green
+        } Else {
+             Write-Host "[УСПЕХ] $PackageName (предположительно) успешно установлен через Chocolatey (нет команды проверки)." -ForegroundColor Green
              Return $True
         }
     } Catch {
-        Write-Error "[FAILURE] Ошибка при установке $PackageName через Chocolatey: $($_.Exception.Message)"
+        Write-Error "[ОШИБКА] Ошибка при установке $PackageName через Chocolatey: $($_.Exception.Message)"
+        Write-Error "Полная информация об ошибке: $_"
         Return $False
     }
 }
@@ -133,20 +146,21 @@ Write-Host ""
 
 $ProvidedSshKeyPathFromUser = ""
 While (-not (Test-Path $ProvidedSshKeyPathFromUser -PathType Leaf)) {
-    $ProvidedSshKeyPathFromUser = Read-Host -Prompt "Введите ПОЛНЫЙ путь к вашему ВРЕМЕННОМУ РАСШИФРОВАННОМУ приватному SSH-ключу"
+    $PromptMessage = "Введите ПОЛНЫЙ путь к вашему ВРЕМЕННОМУ РАСШИФРОВАННОМУ приватному SSH-ключу"
+    $ProvidedSshKeyPathFromUser = Read-Host -Prompt $PromptMessage
     If (-not (Test-Path $ProvidedSshKeyPathFromUser -PathType Leaf)) {
-        Write-Warning "[WARNING] Файл не найден по указанному пути. Пожалуйста, проверьте путь и попробуйте снова."
+        Write-Warning "[ПРЕДУПРЕЖДЕНИЕ] Файл не найден по указанному пути. Пожалуйста, проверьте путь и попробуйте снова."
     }
 }
-Write-Host "[INFO] Используется SSH-ключ, указанный пользователем: $ProvidedSshKeyPathFromUser" -ForegroundColor Cyan
+Write-Host "[ИНФО] Используется SSH-ключ, указанный пользователем: $ProvidedSshKeyPathFromUser" -ForegroundColor Cyan
 
-# Копируем предоставленный ключ во временное место, управляемое скриптом
 Try {
     Copy-Item -Path $ProvidedSshKeyPathFromUser -Destination $TempSshKeyForUse -Force
-    Write-Host "[SUCCESS] Ключ скопирован в '$TempSshKeyForUse' для временного использования." -ForegroundColor Green
+    Write-Host "[УСПЕХ] Ключ скопирован в '$TempSshKeyForUse' для временного использования." -ForegroundColor Green
 } Catch {
-    Write-Error "[FAILURE] Не удалось скопировать ключ из '$ProvidedSshKeyPathFromUser' в '$TempSshKeyForUse'. Ошибка: $($_.Exception.Message)"
-    Exit 1 # Без ключа дальше нет смысла
+    Write-Error "[ОШИБКА] Не удалось скопировать ключ из '$ProvidedSshKeyPathFromUser' в '$TempSshKeyForUse'. Ошибка: $($_.Exception.Message)"
+    Write-Error "Полная информация об ошибке: $_"
+    Exit 1
 }
 Write-Host ""
 
@@ -155,8 +169,7 @@ Write-Host "--------------------------------------------------------------------
 Write-Host " ШАГ 2: УСТАНОВКА CHOCOLATEY " -ForegroundColor Magenta
 Write-Host "----------------------------------------------------------------------" -ForegroundColor Magenta
 If (-not (Install-Chocolatey)) {
-    Write-Error "[FAILURE] Не удалось установить Chocolatey. Дальнейшее выполнение невозможно."
-    # Попытка удалить временный ключ перед выходом
+    Write-Error "[ОШИБКА] Не удалось установить Chocolatey. Дальнейшее выполнение невозможно."
     If (Test-Path $TempSshKeyForUse) { Remove-Item $TempSshKeyForUse -Force -ErrorAction SilentlyContinue }
     Exit 1
 }
@@ -167,7 +180,7 @@ Write-Host "--------------------------------------------------------------------
 Write-Host " ШАГ 3: УСТАНОВКА GIT " -ForegroundColor Magenta
 Write-Host "----------------------------------------------------------------------" -ForegroundColor Magenta
 If (-not (Install-Package-With-Choco -PackageName "Git" -ChocoId "git.install" -InstallCheckCommand "git --version" -InstallCheckExpectedOutputPattern "git version\s+\d+\.\d+\.\d+")) {
-    Write-Error "[FAILURE] Не удалось установить Git. Дальнейшее выполнение невозможно."
+    Write-Error "[ОШИБКА] Не удалось установить Git. Дальнейшее выполнение невозможно."
     If (Test-Path $TempSshKeyForUse) { Remove-Item $TempSshKeyForUse -Force -ErrorAction SilentlyContinue }
     Exit 1
 }
@@ -178,9 +191,8 @@ Write-Host "--------------------------------------------------------------------
 Write-Host " ШАГ 4: УСТАНОВКА PYTHON 3 " -ForegroundColor Magenta
 Write-Host "----------------------------------------------------------------------" -ForegroundColor Magenta
 If (-not (Install-Package-With-Choco -PackageName "Python 3" -ChocoId "python3" -InstallCheckCommand "python --version" -InstallCheckExpectedOutputPattern "Python\s+3\.\d+\.\d+")) {
-    # Попытка с python3.exe, если python.exe не найден сразу
     If (-not (Install-Package-With-Choco -PackageName "Python 3" -ChocoId "python3" -InstallCheckCommand "python3 --version" -InstallCheckExpectedOutputPattern "Python\s+3\.\d+\.\d+")) {
-        Write-Error "[FAILURE] Не удалось установить Python 3. Дальнейшее выполнение невозможно."
+        Write-Error "[ОШИБКА] Не удалось установить Python 3. Дальнейшее выполнение невозможно."
         If (Test-Path $TempSshKeyForUse) { Remove-Item $TempSshKeyForUse -Force -ErrorAction SilentlyContinue }
         Exit 1
     }
@@ -191,17 +203,15 @@ Write-Host ""
 Write-Host "----------------------------------------------------------------------" -ForegroundColor Magenta
 Write-Host " ШАГ 5: СКАЧИВАНИЕ PYTHON-ЗАГРУЗЧИКА " -ForegroundColor Magenta
 Write-Host "----------------------------------------------------------------------" -ForegroundColor Magenta
-Write-Host "[INFO] Скачивание Python-загрузчика ($PythonBootstrapScriptUrl) в '$PythonBootstrapScriptLocalPath'..."
+Write-Host "[ИНФО] Скачивание Python-загрузчика ($PythonBootstrapScriptUrl) в '$PythonBootstrapScriptLocalPath'..."
 Try {
-    # Создаем директорию, если ее нет
     $ParentDir = Split-Path $PythonBootstrapScriptLocalPath -Parent
-    If (-not (Test-Path $ParentDir)) {
-        New-Item -ItemType Directory -Path $ParentDir -Force | Out-Null
-    }
+    If (-not (Test-Path $ParentDir)) { New-Item -ItemType Directory -Path $ParentDir -Force | Out-Null }
     (New-Object System.Net.WebClient).DownloadFile($PythonBootstrapScriptUrl, $PythonBootstrapScriptLocalPath)
-    Write-Host "[SUCCESS] Python-загрузчик успешно скачан." -ForegroundColor Green
+    Write-Host "[УСПЕХ] Python-загрузчик успешно скачан." -ForegroundColor Green
 } Catch {
-    Write-Error "[FAILURE] Ошибка при скачивании Python-загрузчика: $($_.Exception.Message)"
+    Write-Error "[ОШИБКА] Ошибка при скачивании Python-загрузчика: $($_.Exception.Message)"
+    Write-Error "Полная информация об ошибке: $_"
     If (Test-Path $TempSshKeyForUse) { Remove-Item $TempSshKeyForUse -Force -ErrorAction SilentlyContinue }
     Exit 1
 }
@@ -211,41 +221,39 @@ Write-Host ""
 Write-Host "----------------------------------------------------------------------" -ForegroundColor Magenta
 Write-Host " ШАГ 6: ЗАПУСК PYTHON-ЗАГРУЗЧИКА " -ForegroundColor Magenta
 Write-Host "----------------------------------------------------------------------" -ForegroundColor Magenta
-Write-Host "[INFO] Запуск Python-загрузчика '$PythonBootstrapScriptLocalPath'..."
-$PythonExecutable = "python.exe" # По умолчанию. Можно добавить поиск python3.exe
-# Проверим, доступен ли python.exe
+Write-Host "[ИНФО] Запуск Python-загрузчика '$PythonBootstrapScriptLocalPath'..."
+$PythonExecutable = "python.exe"
 If (-not (Get-Command python.exe -ErrorAction SilentlyContinue)) {
-    If (Get-Command python3.exe -ErrorAction SilentlyContinue) {
-        $PythonExecutable = "python3.exe"
-        Write-Host "[INFO] Используется $PythonExecutable"
-    } Else {
-        Write-Warning "[WARNING] Не удалось найти python.exe или python3.exe. Попытка запустить как 'python'."
-    }
+    If (Get-Command python3.exe -ErrorAction SilentlyContinue) { $PythonExecutable = "python3.exe"; Write-Host "[ИНФО] Используется $PythonExecutable" }
+    Else { Write-Warning "[ПРЕДУПРЕЖДЕНИЕ] Не удалось найти python.exe или python3.exe. Попытка запустить как 'python'." }
 }
 
-$PythonScriptExitCode = 1 # По умолчанию - ошибка
+$PythonScriptExitCode = 1
 Try {
     $Arguments = @(
-        "--ssh-key", "`"$TempSshKeyForUse`"", # Передаем путь к временному ключу
+        "`"$PythonBootstrapScriptLocalPath`"", # Путь к Python скрипту первым
+        "--ssh-key", "`"$TempSshKeyForUse`"",
         "--repo-url", $MainAutomationRepoUrl,
         "--target-dir", $MainAutomationLocalDir
-        # Можно добавить "--req-file", "requirements.txt" если необходимо
     )
-    Write-Host "[COMMAND] $PythonExecutable `"$PythonBootstrapScriptLocalPath`" $($Arguments -join ' ')"
+    Write-Host "[КОМАНДА] & `"$PythonExecutable`" $($Arguments -join ' ')"
     
-    # Запускаем Python скрипт. & $PythonExecutable ... не всегда корректно возвращает $LASTEXITCODE
-    # Используем Start-Process для лучшего контроля
-    $Process = Start-Process -FilePath $PythonExecutable -ArgumentList ($PythonBootstrapScriptLocalPath, $Arguments) -Wait -PassThru -NoNewWindow
-    $PythonScriptExitCode = $Process.ExitCode
+    # Использование Invoke-Expression для запуска, чтобы перенаправить вывод в консоль PowerShell
+    # Важно: Аргументы должны быть правильно экранированы.
+    $CommandToRun = "& `"$PythonExecutable`" " + ($Arguments | ForEach-Object { "`"$_`"" } | Join-String -Separator " ")
+    # Write-Host "[DEBUG] Команда для Invoke-Expression: $CommandToRun" # Для отладки
+    Invoke-Expression $CommandToRun
+    $PythonScriptExitCode = $LASTEXITCODE # Получаем код возврата от Python скрипта
     
     If ($PythonScriptExitCode -ne 0) {
-        Write-Error "[FAILURE] Python-загрузчик завершился с ошибкой (код: $PythonScriptExitCode)."
+        Write-Error "[ОШИБКА] Python-загрузчик завершился с ошибкой (код: $PythonScriptExitCode)."
     } Else {
-        Write-Host "[SUCCESS] Python-загрузчик успешно отработал." -ForegroundColor Green
+        Write-Host "[УСПЕХ] Python-загрузчик успешно отработал." -ForegroundColor Green
     }
 } Catch {
-    Write-Error "[FAILURE] Критическая ошибка при запуске Python-загрузчика: $($_.Exception.Message)"
-    $PythonScriptExitCode = 255 # Общий код ошибки
+    Write-Error "[ОШИБКА] Критическая ошибка при запуске Python-загрузчика: $($_.Exception.Message)"
+    Write-Error "Полная информация об ошибке: $_"
+    $PythonScriptExitCode = 255
 } Finally {
     # Шаг 7: Очистка - удаление временного SSH-ключа
     Write-Host ""
@@ -253,34 +261,34 @@ Try {
     Write-Host " ШАГ 7: ОЧИСТКА " -ForegroundColor Magenta
     Write-Host "----------------------------------------------------------------------" -ForegroundColor Magenta
     If (Test-Path $TempSshKeyForUse) {
-        Write-Host "[INFO] Удаление временного SSH-ключа: '$TempSshKeyForUse'" -ForegroundColor Yellow
+        Write-Host "[ИНФО] Удаление временного SSH-ключа: '$TempSshKeyForUse'" -ForegroundColor Yellow
         Try {
             Remove-Item $TempSshKeyForUse -Force -ErrorAction Stop
             If (-not (Test-Path $TempSshKeyForUse)) {
-                Write-Host "[SUCCESS] Временный SSH-ключ успешно удален." -ForegroundColor Green
+                Write-Host "[УСПЕХ] Временный SSH-ключ успешно удален." -ForegroundColor Green
             } Else {
-                # Это не должно произойти, если ErrorAction Stop сработал, но на всякий случай
-                Write-Warning "[WARNING] Не удалось подтвердить удаление временного SSH-ключа: '$TempSshKeyForUse'. Пожалуйста, удалите его вручную!"
+                Write-Warning "[ПРЕДУПРЕЖДЕНИЕ] Не удалось подтвердить удаление временного SSH-ключа: '$TempSshKeyForUse'. Пожалуйста, удалите его вручную!"
             }
         } Catch {
-             Write-Warning "[WARNING] Ошибка при удалении временного SSH-ключа '$TempSshKeyForUse': $($_.Exception.Message). Пожалуйста, удалите его вручную!"
+             Write-Warning "[ПРЕДУПРЕЖДЕНИЕ] Ошибка при удалении временного SSH-ключа '$TempSshKeyForUse': $($_.Exception.Message). Пожалуйста, удалите его вручную!"
+             Write-Warning "Полная информация об ошибке: $_"
         }
     } Else {
-        Write-Host "[INFO] Временный SSH-ключ '$TempSshKeyForUse' не найден для удаления (возможно, уже удален или не был создан)."
+        Write-Host "[ИНФО] Временный SSH-ключ '$TempSshKeyForUse' не найден для удаления."
     }
 }
 
 Write-Host ""
 If ($PythonScriptExitCode -ne 0) {
-    Write-Error "[FAILURE] Загрузка и настройка завершились с ошибками."
+    Write-Error "[ЗАВЕРШЕНИЕ С ОШИБКАМИ] Загрузка и настройка не были полностью успешными."
     Exit $PythonScriptExitCode
 }
 
 Write-Host "--- Загрузчик первого уровня (bootstrap_level1.ps1) успешно завершил работу. ---" -ForegroundColor Yellow
-Write-Host "Основной проект автоматизации должен быть склонирован в: $MainAutomationLocalDir" -ForegroundColor Cyan
+Write-Host "Основной проект автоматизации должен быть склонирован в: '$MainAutomationLocalDir'" -ForegroundColor Cyan
 Write-Host "Для продолжения настройки:" -ForegroundColor Cyan
 Write-Host "1. Перейдите в директорию: cd '$MainAutomationLocalDir'" -ForegroundColor Cyan
 Write-Host "2. Запустите главный скрипт автоматизации (например, main_runner.py) от имени Администратора." -ForegroundColor Cyan
 Write-Host "   Пример: python main_runner.py" -ForegroundColor Cyan
 Write-Host ""
-Exit 0 # Успешное завершение
+Exit 0
