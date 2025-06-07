@@ -1,92 +1,83 @@
-# initial_setup.py
+# initial_setup_zip_download.py
 import argparse
 import os
-import subprocess
 import sys
 import shutil
 import platform
+import zipfile
+import requests # Эту зависимость нужно будет как-то решить
 
 # --- Конфигурация ---
-# URL твоего основного ПРИВАТНОГО репозитория автоматизации
-DEFAULT_MAIN_REPO_URL = "git@github.com:proga1cma/YOUR_MAIN_PRIVATE_AUTOMATION_REPO.git" # !!! ЗАМЕНИ !!!
-DEFAULT_MAIN_REPO_LOCAL_DIR = "C:\\WindowsAutomationSetup" # Куда будет склонирован основной репозиторий
-DEFAULT_REQUIREMENTS_FILE = "requirements.txt"
+DEFAULT_MAIN_REPO_OWNER = "proga1cma"
+DEFAULT_MAIN_REPO_NAME = "YOUR_MAIN_PRIVATE_AUTOMATION_REPO" # !!! ЗАМЕНИ !!!
+DEFAULT_MAIN_REPO_BRANCH = "main"
+DEFAULT_MAIN_REPO_LOCAL_DIR = "C:\\WindowsAutomationSetup"
 
-def get_default_ssh_key_path():
-    """Возвращает стандартный путь к SSH ключу в зависимости от ОС."""
-    home_dir = os.path.expanduser("~")
-    return os.path.join(home_dir, ".ssh", "id_rsa")
-
-def check_command_exists(command):
-    """Проверяет, доступна ли команда в системе."""
-    try:
-        subprocess.run([command, "--version"], check=True, capture_output=True, text=True, shell=(platform.system() == "Windows"))
-        print(f"[ИНФО] Команда '{command}' найдена.")
-        return True
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        print(f"[ОШИБКА] Команда '{command}' не найдена. Пожалуйста, убедитесь, что она установлена и добавлена в PATH.")
-        return False
-
-def configure_git_ssh(ssh_key_path):
-    """Настраивает GIT_SSH_COMMAND для использования указанного SSH-ключа."""
-    if not os.path.exists(ssh_key_path):
-        print(f"[ОШИБКА] SSH-ключ не найден по пути: {ssh_key_path}")
-        return False
-
-    ssh_executable = "ssh.exe" if platform.system() == "Windows" else "ssh"
-    # Для Windows используем 'nul', для Linux/macOS '/dev/null'
-    null_device = "nul" if platform.system() == "Windows" else "/dev/null"
+def download_repo_zip(owner, repo_name, branch, target_zip_path, pat=None):
+    """Скачивает ZIP-архив репозитория через GitHub API."""
+    api_url = f"https://api.github.com/repos/{owner}/{repo_name}/zipball/{branch}"
+    headers = {}
+    if pat:
+        headers["Authorization"] = f"token {pat}"
     
-    # Нормализуем путь для использования в команде
-    normalized_key_path = os.path.normpath(ssh_key_path)
-
-    git_ssh_command = f'"{ssh_executable}" -i "{normalized_key_path}" -o StrictHostKeyChecking=no -o UserKnownHostsFile={null_device}'
-    os.environ['GIT_SSH_COMMAND'] = git_ssh_command
-    print(f"[ИНФО] GIT_SSH_COMMAND установлен: {git_ssh_command}")
-    return True
-
-def clone_repository(repo_url, target_dir):
-    """Клонирует репозиторий в указанную директорию."""
-    if os.path.exists(target_dir):
-        print(f"[ПРЕДУПРЕЖДЕНИЕ] Директория '{target_dir}' уже существует.")
-        overwrite = input(f"Удалить существующую директорию и клонировать заново? (y/n): ").strip().lower()
-        if overwrite == 'y':
-            print(f"[ИНФО] Удаление директории: {target_dir}")
-            try:
-                shutil.rmtree(target_dir)
-            except Exception as e:
-                print(f"[ОШИБКА] Ошибка при удалении директории {target_dir}: {e}")
-                return False
-        else:
-            print("[ИНФО] Клонирование отменено. Используйте существующую директорию или выберите другую.")
-            return True # Предположим, что пользователь хочет работать с существующей
-
-    print(f"[ИНФО] Клонирование репозитория {repo_url} в {target_dir}...")
+    print(f"[ИНФО] Скачивание ZIP-архива репозитория: {owner}/{repo_name} (ветка: {branch})")
     try:
-        # Убедимся, что родительская директория существует, если target_dir имеет несколько уровней
-        # os.makedirs(os.path.dirname(target_dir), exist_ok=True) # shutil.rmtree уже удалил
-        subprocess.run(["git", "clone", repo_url, target_dir], check=True, shell=(platform.system() == "Windows"))
-        print("[УСПЕХ] Репозиторий успешно склонирован.")
+        response = requests.get(api_url, headers=headers, stream=True, timeout=60)
+        response.raise_for_status() # Проверка на HTTP ошибки
+        with open(target_zip_path, 'wb') as f:
+            for chunk in response.iter_content(chunk_size=8192):
+                f.write(chunk)
+        print(f"[УСПЕХ] ZIP-архив успешно скачан: {target_zip_path}")
         return True
-    except subprocess.CalledProcessError as e:
-        print(f"[ОШИБКА] Ошибка при клонировании репозитория: {e}")
-        if hasattr(e, 'stderr') and e.stderr:
-            print(f"Git stderr: {e.stderr.decode(errors='ignore') if isinstance(e.stderr, bytes) else e.stderr}")
-        return False
-    except FileNotFoundError:
-        print("[ОШИБКА] Команда 'git' не найдена. Убедитесь, что Git установлен и в PATH.")
+    except requests.exceptions.RequestException as e:
+        print(f"[ОШИБКА] Ошибка при скачивании ZIP-архива: {e}")
+        if hasattr(e, 'response') and e.response is not None:
+            print(f"Ответ сервера: {e.response.status_code} - {e.response.text[:200]}")
         return False
 
-def install_dependencies(project_dir, requirements_file=DEFAULT_REQUIREMENTS_FILE):
+def extract_zip(zip_path, destination_path):
+    """Распаковывает ZIP-архив."""
+    print(f"[ИНФО] Распаковка архива {zip_path} в {destination_path}...")
+    try:
+        # Очищаем целевую директорию, если она существует
+        if os.path.exists(destination_path):
+            print(f"[ИНФО] Очистка существующей директории: {destination_path}")
+            shutil.rmtree(destination_path)
+        os.makedirs(destination_path, exist_ok=True)
+
+        with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+            # GitHub ZIP-архивы обычно содержат одну папку верхнего уровня типа user-repo-commitsha
+            # Нам нужно извлечь содержимое этой папки в destination_path
+            top_level_dirs = list(set(item.split('/')[0] for item in zip_ref.namelist()))
+            if len(top_level_dirs) == 1 and '/' in zip_ref.namelist()[0]: # Проверяем, что есть одна папка верхнего уровня
+                prefix = top_level_dirs[0] + '/'
+                for member in zip_ref.namelist():
+                    if member.startswith(prefix):
+                        target_path = os.path.join(destination_path, member[len(prefix):])
+                        if member.endswith('/'): # это директория
+                            os.makedirs(target_path, exist_ok=True)
+                        else: # это файл
+                            os.makedirs(os.path.dirname(target_path), exist_ok=True)
+                            with open(target_path, 'wb') as outfile:
+                                outfile.write(zip_ref.read(member))
+            else: # Если структура не такая, извлекаем все как есть (может создать лишнюю папку)
+                zip_ref.extractall(destination_path)
+        print("[УСПЕХ] Архив успешно распакован.")
+        return True
+    except Exception as e:
+        print(f"[ОШИБКА] Ошибка при распаковке архива: {e}")
+        return False
+
+def install_dependencies(project_dir, requirements_file="requirements.txt"):
     """Устанавливает зависимости из requirements.txt."""
+    # Эта функция остается такой же, как в предыдущей версии initial_setup.py
+    # ... (код функции install_dependencies) ...
     requirements_path = os.path.join(project_dir, requirements_file)
     if not os.path.exists(requirements_path):
-        print(f"[ИНФО] Файл зависимостей '{requirements_file}' не найден в '{project_dir}'. Пропуск установки зависимостей.")
+        print(f"[ИНФО] Файл зависимостей '{requirements_file}' не найден в '{project_dir}'. Пропуск.")
         return True
-
     print(f"[ИНФО] Установка зависимостей из {requirements_path}...")
     try:
-        # Используем sys.executable для вызова pip из того же окружения Python
         subprocess.run([sys.executable, "-m", "pip", "install", "-r", requirements_path], check=True, cwd=project_dir)
         print("[УСПЕХ] Зависимости успешно установлены.")
         return True
@@ -95,91 +86,99 @@ def install_dependencies(project_dir, requirements_file=DEFAULT_REQUIREMENTS_FIL
         return False
 
 def main():
-    parser = argparse.ArgumentParser(description="Загрузчик и настройщик основного проекта автоматизации Windows.")
+    parser = argparse.ArgumentParser(description="Загрузчик основного проекта автоматизации (скачивание ZIP).")
     parser.add_argument(
-        "--ssh-key-path",
-        default=get_default_ssh_key_path(),
-        help=f"Полный путь к вашему приватному SSH-ключу. По умолчанию: {get_default_ssh_key_path()}"
+        "--pat",
+        help="GitHub Personal Access Token для доступа к приватному репозиторию."
     )
     parser.add_argument(
-        "--main-repo-url",
-        default=DEFAULT_MAIN_REPO_URL,
-        help=f"URL основного приватного Git-репозитория (SSH). По умолчанию: {DEFAULT_MAIN_REPO_URL}"
+        "--owner", default=DEFAULT_MAIN_REPO_OWNER,
+        help=f"Владелец основного приватного репозитория. По умолчанию: {DEFAULT_MAIN_REPO_OWNER}"
     )
     parser.add_argument(
-        "--main-repo-dir",
-        default=DEFAULT_MAIN_REPO_LOCAL_DIR,
-        help=f"Локальная директория для клонирования основного репозитория. По умолчанию: {DEFAULT_MAIN_REPO_LOCAL_DIR}"
+        "--repo", default=DEFAULT_MAIN_REPO_NAME,
+        help=f"Имя основного приватного репозитория. По умолчанию: {DEFAULT_MAIN_REPO_NAME}"
     )
     parser.add_argument(
-        "--skip-main-runner",
-        action="store_true",
-        help="Пропустить автоматический запуск main_runner.py после установки."
+        "--branch", default=DEFAULT_MAIN_REPO_BRANCH,
+        help=f"Ветка основного приватного репозитория. По умолчанию: {DEFAULT_MAIN_REPO_BRANCH}"
     )
-
+    parser.add_argument(
+        "--target-dir", default=DEFAULT_MAIN_REPO_LOCAL_DIR,
+        help=f"Локальная директория для распаковки. По умолчанию: {DEFAULT_MAIN_REPO_LOCAL_DIR}"
+    )
+    parser.add_argument(
+        "--skip-main-runner", action="store_true",
+        help="Пропустить автоматический запуск main_runner.py."
+    )
     args = parser.parse_args()
 
-    print("--- Запуск начальной настройки (initial_setup.py) ---")
+    print("--- Запуск начальной настройки (скачивание ZIP) ---")
 
-    # 0. Проверка наличия Git и Python (Python уже должен быть, раз скрипт запущен)
-    if not check_command_exists("git"):
+    github_pat = args.pat
+    if not github_pat:
+        print("[ПРЕДУПРЕЖДЕНИЕ] GitHub Personal Access Token (PAT) не предоставлен через аргумент --pat.")
+        if 'GITHUB_PAT' in os.environ:
+            github_pat = os.environ['GITHUB_PAT']
+            print("[ИНФО] Используется PAT из переменной окружения GITHUB_PAT.")
+        else:
+            try:
+                github_pat = input("Введите ваш GitHub Personal Access Token (или нажмите Enter для анонимного доступа, если репозиторий публичный): ").strip()
+                if not github_pat:
+                    print("[ИНФО] PAT не введен, попытка анонимного доступа (для публичных репозиториев).")
+            except EOFError: # Если скрипт запускается неинтерактивно
+                print("[ОШИБКА] Не удалось запросить PAT в неинтерактивном режиме. Используйте --pat или переменную окружения GITHUB_PAT.")
+                sys.exit(1)
+
+
+    temp_zip_file = os.path.join(os.getenv('TEMP', '.'), f"{args.repo}__{args.branch}.zip")
+
+    # 1. Скачать ZIP приватного репозитория
+    if not download_repo_zip(args.owner, args.repo, args.branch, temp_zip_file, github_pat):
         sys.exit(1)
-    if not check_command_exists(sys.executable): # Проверка текущего интерпретатора Python
-        print(f"[ОШИБКА] Не удалось проверить текущий интерпретатор Python: {sys.executable}")
+
+    # 2. Распаковать архив
+    if not extract_zip(temp_zip_file, args.target_dir):
+        if os.path.exists(temp_zip_file): os.remove(temp_zip_file)
         sys.exit(1)
-
-
-    # 1. Запросить/проверить путь к SSH-ключу
-    ssh_key_path_to_use = args.ssh_key_path
-    if not os.path.exists(ssh_key_path_to_use):
-        print(f"[ПРЕДУПРЕЖДЕНИЕ] SSH-ключ не найден по стандартному пути или указанному: {ssh_key_path_to_use}")
-        while True:
-            custom_path = input("Пожалуйста, введите ПОЛНЫЙ путь к вашему приватному SSH-ключу (id_rsa): ").strip()
-            if os.path.exists(custom_path) and os.path.isfile(custom_path):
-                ssh_key_path_to_use = custom_path
-                break
-            else:
-                print("[ОШИБКА] Файл не найден по указанному пути. Попробуйте снова.")
     
-    print(f"[ИНФО] Используется SSH-ключ: {ssh_key_path_to_use}")
+    if os.path.exists(temp_zip_file):
+        os.remove(temp_zip_file) # Удаляем временный zip
 
-    # 2. Настроить SSH для Git
-    if not configure_git_ssh(ssh_key_path_to_use):
-        sys.exit(1)
+    # 3. Установить зависимости (если есть requirements.txt)
+    if not install_dependencies(args.target_dir):
+        print("[ПРЕДУПРЕЖДЕНИЕ] Установка зависимостей не удалась.")
 
-    # 3. Клонировать основной приватный репозиторий
-    if not clone_repository(args.main_repo_url, args.main_repo_dir):
-        sys.exit(1)
+    print("\n--- Начальная настройка (скачивание ZIP) завершена! ---")
+    print(f"Основной проект автоматизации распакован в: {args.target_dir}")
 
-    # 4. Установить зависимости основного проекта
-    if not install_dependencies(args.main_repo_dir):
-        print("[ПРЕДУПРЕЖДЕНИЕ] Установка зависимостей не удалась. Основной скрипт может работать некорректно.")
-        # Решите, стоит ли прерывать: sys.exit(1)
-
-    print("\n--- Начальная настройка завершена! ---")
-    print(f"Основной проект автоматизации склонирован в: {args.main_repo_dir}")
-
-    # 5. (Опционально) Запустить main_runner.py
+    # 4. (Опционально) Запустить main_runner.py
     if not args.skip_main_runner:
-        main_runner_path = os.path.join(args.main_repo_dir, "main_runner.py")
+        # ... (логика запуска main_runner.py, как в предыдущем initial_setup.py) ...
+        main_runner_path = os.path.join(args.target_dir, "main_runner.py")
         if os.path.exists(main_runner_path):
             print(f"\n[ИНФО] Попытка запуска основного скрипта: {main_runner_path}")
             print("---------------------------------------------------------------")
             try:
-                # Запускаем main_runner.py. Он должен сам проверять права администратора, если нужно.
-                # Для Windows может потребоваться shell=True, если main_runner.py делает что-то специфичное для консоли.
-                subprocess.run([sys.executable, main_runner_path], check=True, cwd=args.main_repo_dir, shell=(platform.system() == "Windows"))
-            except subprocess.CalledProcessError as e:
-                print(f"[ОШИБКА] Ошибка при выполнении main_runner.py: {e}")
+                subprocess.run([sys.executable, main_runner_path], check=True, cwd=args.target_dir, shell=(platform.system() == "Windows"))
             except Exception as e:
-                print(f"[ОШИБКА] Непредвиденная ошибка при запуске main_runner.py: {e}")
+                print(f"[ОШИБКА] Ошибка при запуске main_runner.py: {e}")
         else:
-            print(f"[ПРЕДУПРЕЖДЕНИЕ] Файл main_runner.py не найден в '{args.main_repo_dir}'. Пропуск запуска.")
+            print(f"[ПРЕДУПРЕЖДЕНИЕ] Файл main_runner.py не найден в '{args.target_dir}'.")
     else:
-        print("\n[ИНФО] Пропуск запуска main_runner.py согласно параметру --skip-main-runner.")
-        print(f"Для запуска вручную: cd {args.main_repo_dir} && python main_runner.py")
+        print(f"\n[ИНФО] Пропуск запуска main_runner.py. Для запуска: cd {args.target_dir} && python main_runner.py")
+
 
 if __name__ == "__main__":
-    # Этот скрипт сам по себе может не требовать прав администратора,
-    # но main_runner.py, который он запускает, может их потребовать.
+    # Проверка на Python
+    if not (sys.version_info.major == 3 and sys.version_info.minor >= 6):
+        print("[ОШИБКА] Требуется Python 3.6 или выше.")
+        sys.exit(1)
+    # Проверка на requests (нужно будет решить, как его доставить)
+    try:
+        import requests
+    except ImportError:
+        print("[ОШИБКА] Модуль 'requests' не найден. Пожалуйста, установите его: pip install requests")
+        print("Или убедитесь, что он доступен для этого скрипта.")
+        sys.exit(1)
     main()
